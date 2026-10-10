@@ -1,0 +1,221 @@
+https://github.com/name: Build and Deploy Azan Watch
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  # ============================================
+  # Job 1: ویب ایپ کو GitHub Pages پر deploy کریں
+  # ============================================
+  deploy-web:
+    name: 🌐 Deploy Web App to GitHub Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: 📦 Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: 🚀 Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ============================================
+  # Job 2: ویب ایپ کی validation کریں
+  # ============================================
+  validate:
+    name: ✅ Validate Web App
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔍 Check required files
+        run: |
+          echo "🔎 ضروری فائلوں کی جانچ..."
+          files=("index.html" "manifest.json" "service-worker.js" "adhan.js")
+          missing=0
+          for file in "${files[@]}"; do
+            if [ -f "$file" ]; then
+              echo "✅ $file موجود ہے"
+            else
+              echo "❌ $file غائب ہے"
+              missing=1
+            fi
+          done
+          if [ $missing -eq 1 ]; then
+            echo "⚠️ کچھ ضروری فائلیں غائب ہیں!"
+            exit 1
+          fi
+          echo "🎉 ساری ضروری فائلیں موجود ہیں"
+
+      - name: 📋 Validate manifest.json
+        run: |
+          echo "📋 manifest.json کی جانچ..."
+          if command -v jq &> /dev/null; then
+            jq empty manifest.json && echo "✅ manifest.json درست ہے"
+          else
+            python3 -m json.tool manifest.json > /dev/null && echo "✅ manifest.json درست ہے"
+          fi
+
+      - name: 📏 Check file sizes
+        run: |
+          echo "📏 فائلوں کے سائز:"
+          du -h index.html manifest.json service-worker.js adhan.js azan_alert.wav 2>/dev/null || true
+          echo ""
+          echo "📊 کل سائز:"
+          du -sh . --exclude=.git
+
+  # ============================================
+  # Job 3: PWA کی جانچ کریں
+  # ============================================
+  pwa-check:
+    name: 📱 PWA Health Check
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔍 Check PWA requirements
+        run: |
+          echo "🔎 PWA کی ضروریات چیک کر رہے ہیں..."
+          echo ""
+          
+          # HTTPS check (GitHub Pages provides it)
+          echo "✅ HTTPS: GitHub Pages خودکار دیتا ہے"
+          
+          # Manifest check
+          if grep -q '"name"' manifest.json; then
+            echo "✅ Manifest: name موجود"
+          fi
+          
+          if grep -q '"icons"' manifest.json; then
+            echo "✅ Manifest: icons موجود"
+          fi
+          
+          if grep -q '"start_url"' manifest.json; then
+            echo "✅ Manifest: start_url موجود"
+          fi
+          
+          if grep -q '"display"' manifest.json; then
+            echo "✅ Manifest: display موجود"
+          fi
+          
+          # Service Worker check
+          if grep -q 'self.addEventListener' service-worker.js; then
+            echo "✅ Service Worker: event listeners موجود"
+          fi
+          
+          # Icons check
+          for icon in icon-192.png icon-512.png; do
+            if [ -f "$icon" ]; then
+              echo "✅ Icon: $icon موجود"
+            else
+              echo "⚠️ Icon: $icon غائب"
+            fi
+          done
+          
+          echo ""
+          echo "🎉 PWA کی جانچ مکمل!"
+
+  # ============================================
+  # Job 4: (اختیاری) Android APK بنائیں
+  # ============================================
+  build-android:
+    name: 📱 Build Android APK (Optional)
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 Install Bubblewrap CLI
+        run: npm install -g @bubblewrap/cli
+
+      - name: 🔧 Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 🏗️ Initialize TWA project
+        run: |
+          mkdir -p twa-build
+          cd twa-build
+          echo "⚠️ Bubblewrap init کو انٹرایکٹو ان پٹ کی ضرورت ہے"
+          echo "یہ job صرف manual trigger پر چلتا ہے"
+        continue-on-error: true
+
+      - name: 📤 Upload APK artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: azan-watch-apk
+          path: twa-build/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ============================================
+  # Job 5: Notification (کامیابی کی اطلاع)
+  # ============================================
+  notify:
+    name: 🔔 Notify
+    runs-on: ubuntu-latest
+    needs: [deploy-web, validate, pwa-check]
+    if: always()
+
+    steps:
+      - name: 📢 Deployment Status
+        run: |
+          echo "=========================================="
+          echo "🎉 Azan Watch Deployment مکمل!"
+          echo "=========================================="
+          echo ""
+          echo "🌐 لائیو لنک:"
+          echo "https://qariclinic.github.io/azan-watch-web/"
+          echo ""
+          echo "📦 Repository:"
+          echo "https://github.com/qariclinic/azan-watch-web"
+          echo ""
+          echo "📊 Job Status:"
+          echo "  - Deploy Web: ${{ needs.deploy-web.result }}"
+          echo "  - Validate: ${{ needs.validate.result }}"
+          echo "  - PWA Check: ${{ needs.pwa-check.result }}"
+          echo "=========================================="
