@@ -1,10 +1,7 @@
-name: Build and Deploy Azan Watch
-
+name: Deploy web to GitHub Pages
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -13,139 +10,24 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  deploy-web:
-    name: Deploy Web App to GitHub Pages
+  deploy:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Collect site files
+        run: |
+          mkdir _site
+          cp index.html manifest.json service-worker.js adhan.js adhan.LICENSE.txt azan_alert.wav icon.svg icon-192.png icon-512.png _site/
+      - uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'
-
-      - name: Deploy to GitHub Pages
-        id: deployment
+          path: _site
+      - id: deployment
         uses: actions/deploy-pages@v4
-
-  validate:
-    name: Validate Web App
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Check required files
-        run: |
-          echo "Checking required files..."
-          files=("index.html" "manifest.json" "service-worker.js" "adhan.js")
-          missing=0
-          for file in "${files[@]}"; do
-            if [ -f "$file" ]; then
-              echo "OK: $file found"
-            else
-              echo "MISSING: $file"
-              missing=1
-            fi
-          done
-          if [ $missing -eq 1 ]; then
-            echo "Some required files are missing!"
-            exit 1
-          fi
-          echo "All required files present"
-
-      - name: Validate manifest.json
-        run: |
-          echo "Validating manifest.json..."
-          python3 -m json.tool manifest.json > /dev/null && echo "manifest.json is valid"
-
-      - name: Check file sizes
-        run: |
-          echo "File sizes:"
-          du -h index.html manifest.json service-worker.js adhan.js azan_alert.wav 2>/dev/null || true
-          echo ""
-          echo "Total size:"
-          du -sh . --exclude=.git
-
-  pwa-check:
-    name: PWA Health Check
-    runs-on: ubuntu-latest
-    needs: validate
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Check PWA requirements
-        run: |
-          echo "Checking PWA requirements..."
-          echo ""
-
-          if grep -q '"name"' manifest.json; then
-            echo "OK: manifest name present"
-          fi
-
-          if grep -q '"icons"' manifest.json; then
-            echo "OK: manifest icons present"
-          fi
-
-          if grep -q '"start_url"' manifest.json; then
-            echo "OK: manifest start_url present"
-          fi
-
-          if grep -q '"display"' manifest.json; then
-            echo "OK: manifest display present"
-          fi
-
-          if grep -q 'self.addEventListener' service-worker.js; then
-            echo "OK: service worker event listeners present"
-          fi
-
-          for icon in icon-192.png icon-512.png; do
-            if [ -f "$icon" ]; then
-              echo "OK: $icon found"
-            else
-              echo "WARNING: $icon missing"
-            fi
-          done
-
-          echo ""
-          echo "PWA check complete"
-
-  notify:
-    name: Notify
-    runs-on: ubuntu-latest
-    needs: [deploy-web, validate, pwa-check]
-    if: always()
-
-    steps:
-      - name: Deployment Status
-        run: |
-          echo "=========================================="
-          echo "Azan Watch Deployment Complete"
-          echo "=========================================="
-          echo ""
-          echo "Live URL:"
-          echo "https://qariclinic.github.io/azan-watch-web/"
-          echo ""
-          echo "Repository:"
-          echo "https://github.com/qariclinic/azan-watch-web"
-          echo ""
-          echo "Job Status:"
-          echo "  - Deploy Web: ${{ needs.deploy-web.result }}"
-          echo "  - Validate: ${{ needs.validate.result }}"
-          echo "  - PWA Check: ${{ needs.pwa-check.result }}"
-          echo "=========================================="
